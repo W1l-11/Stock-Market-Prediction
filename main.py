@@ -1,68 +1,78 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import lightgbm as lgb
 import joblib
+import numpy as np
+
+from backtester import VectorizedBacktester
 from data_loader import DataLoader
 from feature_engineering import FeatureEngineer
 from model_trainer import QuantModel
-from backtester import VectorizedBacktester
+
 
 def main():
-    # Setup
-    TICKER = "BBRI.JK" # Coba bank, sangat sensitif thd makro
-    START = "2015-01-01"
-    END = "2023-12-31"
-    
-    # 1. Load Data dengan Makro
-    print("--- 1. Data Loading (Multi-Asset) ---")
-    loader = DataLoader(TICKER, START, END)
-    # Gunakan fungsi baru
-    raw_data = loader.get_data_with_macro()
-    
-    # 2. Feature Engineering dengan Makro
-    print("--- 2. Feature Engineering ---")
-    fe = FeatureEngineer(raw_data)
-    # Chain method baru: add_macro_features
-    processed_data = fe.add_technical_indicators().add_macro_features().add_lags().add_target().get_final_df()
-    
-    # Pilih Fitur
-    exclude_cols = ['Adj Close', 'High', 'Low', 'Open', 'Volume', 'Log_Return', 
-                    'Target_Next_Day_Return', 'Target_Direction', 
-                    'USDIDR', 'SPX', 'OIL'] # Exclude harga mentah makro juga
-    features = [c for c in processed_data.columns if c not in exclude_cols]
-    print(f"Total Fitur: {len(features)}")
-    
-# 3. Training & Tuning
-    qm = QuantModel(processed_data, features)
-    X_train, y_train, X_test, y_test, test_df = qm.prepare_split()
-    
-    qm.optimize_hyperparameters(X_train, y_train, X_test, y_test, n_trials=20)
-    qm.train_final_model(X_train, y_train)
-    
-    # 4. Evaluasi & Backtest
-    preds, probs = qm.evaluate(X_test, y_test)
-    
-    # Hitung entry_threshold di sini agar bisa disimpan
-    entry_threshold = np.percentile(probs, 80)
-    if entry_threshold < 0.5:
-        entry_threshold = 0.505
-        
-    # --- BAGIAN PENYIMPANAN MODEL (PERBAIKAN DI SINI) ---
-    model_export = {
-        'model': qm.model,
-        'features': features,
-        'entry_threshold': entry_threshold
-    }
-    joblib.dump(model_export, "quant_model_bbri.pkl")
-    print(f"\n[SUCCESS] Model disimpan dengan Threshold: {entry_threshold:.4f}")
-    # ----------------------------------------------------
+    TICKER     = "BBRI.JK"
+    START      = "2020-01-01"
+    END        = "2026-02-28"
+    MODEL_PATH = "quant_model_bbri.pkl"
+    TARGET_VOL = 0.15      
 
-    # Jalankan backtest seperti biasa
-    bt = VectorizedBacktester(test_df, probs)
-    bt.run_smart_execution(entry_threshold=entry_threshold, exit_threshold=np.percentile(probs, 40))
+    print("\n--- 1. Data Loading ---")
+    loader   = DataLoader(TICKER, START, END)
+    raw_data = loader.get_historical_data()
+
+    print("\n--- 2. Feature Engineering ---")
+    fe = FeatureEngineer(raw_data)
+    processed = (fe
+                 .add_technical_indicators()
+                 .add_volume_features()
+                 .add_macro_features()
+                 .add_lags()
+                 .add_target(forward_days=1)
+                 .get_df())  
+
+    features = fe.get_feature_names()
+    print(f"  Feature count: {len(features)}")
+    print(f"  Features: {features}")
+
+    print("\n--- 3. Model Training ---")
+    qm = QuantModel(processed, features)
+    train_df, test_df = qm.prepare_train_test_split(test_size=0.2)
+
+    qm.optimize_hyperparameters(train_df, n_trials=30, n_cv_folds=5)
+    qm.train_final_model(train_df)
+
+    print("\n--- 4. Evaluation ---")
+    metrics, probs = qm.evaluate(test_df)
+
+    print("\nTop 10 Feature Importances:")
+    print(qm.get_feature_importance(top_n=10).to_string(index=False))
+
+    print("\n--- 5. Backtest ---")
+    clean_test = test_df.dropna(subset=features + ["Log_Return"])
+
+    bt = VectorizedBacktester(
+        clean_test, probs,
+        target_vol=TARGET_VOL,
+    )
+    bt.run(
+        entry_threshold=qm.entry_threshold,
+        exit_threshold=qm.exit_threshold,
+    )
+    bt.print_metrics()
     bt.plot_results(TICKER)
+
+    model_export = {
+        "model":             qm.model,
+        "features":          features,
+        "entry_threshold":   qm.entry_threshold,
+        "exit_threshold":    qm.exit_threshold,
+        "target_vol":        TARGET_VOL,
+        "macro_cols_required": ["USDIDR_Ret", "SPX_Ret", "OIL_Ret", "JKSE_Ret",
+                                 "USDIDR", "SPX", "OIL", "JKSE"],
+    }
+    joblib.dump(model_export, MODEL_PATH)
+    print(f"\n[SUCCESS] Model saved to {MODEL_PATH}")
+    print(f"  Entry threshold: {qm.entry_threshold:.4f}")
+    print(f"  Exit  threshold: {qm.exit_threshold:.4f}")
+
 
 if __name__ == "__main__":
     main()
-

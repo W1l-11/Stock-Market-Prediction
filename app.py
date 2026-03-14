@@ -7,7 +7,6 @@ import yfinance as yf
 from feature_engineering import FeatureEngineer
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION & FIXED STYLING ---
 st.set_page_config(page_title="IndoQuant Pro Dashboard", layout="wide")
 
 st.markdown("""
@@ -15,9 +14,8 @@ st.markdown("""
     /* Latar belakang aplikasi utama */
     .stApp { background-color: #0e1117; }
     
-    /* Memperbaiki container metrik agar tidak transparan/putih */
     [data-testid="stMetric"] {
-        background-color: #1f2937 !important; /* Warna abu-abu gelap kebiruan */
+        background-color: #1f2937 !important; 
         padding: 20px !important;
         border-radius: 12px !important;
         border: 1px solid #374151 !important;
